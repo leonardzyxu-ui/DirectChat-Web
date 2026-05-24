@@ -4,7 +4,13 @@ This repository is the static DirectChat web app deployment.
 
 The page reads `relay-config.json` at runtime, so the stable website URL can stay the same while the active relay URL changes.
 
-Expected GitHub Pages URL:
+Current live URL:
+
+```text
+https://directchat-web.pages.dev/
+```
+
+Expected GitHub Pages URL after the remote repo exists:
 
 ```text
 https://leonardzyxu-ui.github.io/DirectChat-Web/
