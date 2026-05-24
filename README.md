@@ -19,7 +19,7 @@ https://leonardzyxu-ui.github.io/DirectChat-Web/
 Current relay:
 
 ```text
-https://nature-parameter-cohen-separated.trycloudflare.com
+https://pool-associations-clone-jewellery.trycloudflare.com/
 ```
 
 ## Publish To GitHub
