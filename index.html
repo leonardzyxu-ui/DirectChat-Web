@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0A84FF" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="DirectChat" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <style>
+      :root {
+        color: #101828;
+        background: #f3f5f9;
+        color-scheme: light;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        min-height: 100vh;
+        overflow: hidden;
+        background: #f3f5f9;
+      }
+
+      #root {
+        min-height: 100vh;
+        background: #f3f5f9;
+      }
+
+      .boot-screen {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: minmax(292px, 360px) minmax(0, 1fr);
+        color: #101828;
+        background: #f3f5f9;
+      }
+
+      .boot-sidebar {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        padding: 18px;
+        border-right: 1px solid rgba(17, 24, 39, 0.11);
+        background: #f7f9fc;
+      }
+
+      .boot-card,
+      .boot-search,
+      .boot-row,
+      .boot-message {
+        border: 1px solid rgba(17, 24, 39, 0.09);
+        background: rgba(255, 255, 255, 0.76);
+        box-shadow: 0 18px 58px rgba(15, 23, 42, 0.08);
+      }
+
+      .boot-card {
+        height: 66px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 14px;
+        border-radius: 18px;
+        font-weight: 800;
+      }
+
+      .boot-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: #0a84ff;
+        box-shadow: 0 0 0 4px rgba(10, 132, 255, 0.14);
+      }
+
+      .boot-search {
+        height: 42px;
+        border-radius: 13px;
+      }
+
+      .boot-row {
+        height: 58px;
+        border-radius: 16px;
+      }
+
+      .boot-chat {
+        min-width: 0;
+        display: grid;
+        grid-template-rows: 76px minmax(0, 1fr) 74px;
+        background: #f8fafd;
+      }
+
+      .boot-header,
+      .boot-composer {
+        border-bottom: 1px solid rgba(17, 24, 39, 0.11);
+        background: #fbfcfe;
+      }
+
+      .boot-composer {
+        border-top: 1px solid rgba(17, 24, 39, 0.11);
+        border-bottom: 0;
+      }
+
+      .boot-messages {
+        display: grid;
+        align-content: center;
+        gap: 12px;
+        padding: 28px min(4vw, 44px);
+      }
+
+      .boot-message {
+        width: min(360px, 70%);
+        height: 42px;
+        border-radius: 20px;
+      }
+
+      .boot-message:nth-child(2) {
+        justify-self: end;
+        background: #0a84ff;
+      }
+
+      @media (max-width: 820px) {
+        .boot-screen {
+          grid-template-columns: 1fr;
+        }
+
+        .boot-chat {
+          display: none;
+        }
+
+        .boot-sidebar {
+          height: 100vh;
+          border-right: 0;
+        }
+      }
+    </style>
+    <title>DirectChat</title>
+    <script type="module" crossorigin src="./assets/index-CvhHiuVI.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-B7E_mQvC.css">
+  </head>
+  <body>
+    <div id="root">
+      <div class="boot-screen" aria-label="Loading DirectChat">
+        <aside class="boot-sidebar">
+          <div class="boot-card">
+            <span>DirectChat</span>
+            <span class="boot-dot"></span>
+          </div>
+          <div class="boot-search"></div>
+          <div class="boot-row"></div>
+          <div class="boot-row"></div>
+          <div class="boot-row"></div>
+        </aside>
+        <main class="boot-chat">
+          <div class="boot-header"></div>
+          <div class="boot-messages">
+            <div class="boot-message"></div>
+            <div class="boot-message"></div>
+          </div>
+          <div class="boot-composer"></div>
+        </main>
+      </div>
+    </div>
+  </body>
+</html>
