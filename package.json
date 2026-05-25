@@ -1,0 +1,16 @@
+{
+  "name": "directchat-web-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server/render-server.js"
+  },
+  "dependencies": {
+    "@upstash/redis": "^1.38.0",
+    "ws": "^8.21.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
