@@ -19,7 +19,7 @@ https://leonardzyxu-ui.github.io/DirectChat-Web/
 Current relay:
 
 ```text
-https://pool-associations-clone-jewellery.trycloudflare.com/
+https://recognition-dramatic-poultry-bottom.trycloudflare.com/
 ```
 
 ## Publish To GitHub
