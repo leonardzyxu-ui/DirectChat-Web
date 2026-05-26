@@ -19,7 +19,7 @@ https://leonardzyxu-ui.github.io/DirectChat-Web/
 Current relay:
 
 ```text
-https://recognition-dramatic-poultry-bottom.trycloudflare.com/
+https://directchat-relay.onrender.com/
 ```
 
 ## Publish To GitHub
@@ -40,7 +40,7 @@ From the parent `developer` folder:
 ```sh
 cd DirectChatRelay
 npm run build
-rsync -a --delete web/dist/ ../DirectChatWeb/ --exclude .git
+rsync -a --delete web/dist/ ../DirectChatWeb/ --exclude .git --exclude .github --exclude .nojekyll --exclude README.md
 cd ../DirectChatWeb
 git add .
 git commit -m "Update DirectChat web build"
