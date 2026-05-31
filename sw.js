@@ -1,6 +1,6 @@
-const CACHE_NAME = "directchat-shell-v4";
+const CACHE_NAME = "directchat-shell-v5";
 const SCOPE_PATH = new URL(self.registration.scope).pathname;
-const SHELL_URLS = ["./", "./pwa-192.svg", "./pwa-512.svg"].map(path => new URL(path, self.registration.scope).toString());
+const SHELL_URLS = ["./", "./pwa-192.png", "./pwa-512.png", "./pwa-192.svg", "./pwa-512.svg"].map(path => new URL(path, self.registration.scope).toString());
 
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(SHELL_URLS)));
@@ -56,8 +56,8 @@ self.addEventListener("push", event => {
   event.waitUntil(
     self.registration.showNotification(payload.title || "DirectChat", {
       body: payload.body || "New DirectChat message.",
-      icon: new URL("./pwa-192.svg", self.registration.scope).toString(),
-      badge: new URL("./pwa-192.svg", self.registration.scope).toString(),
+      icon: new URL("./pwa-192.png", self.registration.scope).toString(),
+      badge: new URL("./pwa-192.png", self.registration.scope).toString(),
       tag: "directchat-message",
       renotify: true,
       requireInteraction: false,

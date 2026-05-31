@@ -7,6 +7,7 @@ import { Redis } from "@upstash/redis";
 import { WebSocket, WebSocketServer } from "ws";
 
 const MAX_MAILBOX_ITEMS = 100;
+const MAX_DEVICE_MAILBOX_ITEMS = 100;
 const MAX_QUEUED_ENVELOPE_BYTES = 64 * 1024;
 const MAX_PUSH_SUBSCRIPTIONS = 10;
 const PUSH_THROTTLE_MS = 20_000;
@@ -23,11 +24,12 @@ export function createDirectChatServer(options = {}) {
   const store = options.store || createStoreFromEnv();
   const socketsByUser = new Map();
   const socketUsers = new Map();
+  const socketDevices = new Map();
   const wss = new WebSocketServer({ noServer: true });
 
   const server = createServer(async (request, response) => {
     try {
-      await handleHTTP(request, response, { store, socketsByUser, socketUsers });
+      await handleHTTP(request, response, { store, socketsByUser, socketUsers, socketDevices });
     } catch (error) {
       sendJSON(response, { error: error?.message || "internal server error" }, 500);
     }
@@ -42,7 +44,7 @@ export function createDirectChatServer(options = {}) {
       return;
     }
     wss.handleUpgrade(request, socket, head, websocket => {
-      attachSocket(websocket, userID, { store, socketsByUser, socketUsers });
+      attachSocket(websocket, userID, { store, socketsByUser, socketUsers, socketDevices });
     });
   });
 
@@ -59,7 +61,12 @@ async function handleHTTP(request, response, context) {
   }
 
   if (url.pathname === "/health") {
-    sendJSON(response, { ok: true, service: "directchat-relay", runtime: "render-upstash" });
+    sendJSON(response, {
+      ok: true,
+      service: "directchat-relay",
+      runtime: "render-upstash",
+      syncProtocol: "device-cursor-v1"
+    });
     return;
   }
 
@@ -202,12 +209,20 @@ async function handleSocketMessage(socket, urlUserID, data, context) {
         throw new Error("websocket user id mismatch");
       }
       await registerProfile(message, context);
-      await markSocketOnline(socket, message.userID, context);
-      safeSend(socket, { type: "ready", userID: message.userID });
+      await registerDevice(message, context);
+      await markSocketOnline(socket, message.userID, context, message.deviceID);
+      const record = await context.store.getUser(message.userID);
+      safeSend(socket, {
+        type: "ready",
+        userID: message.userID,
+        deviceID: cleanDeviceID(message.deviceID) || null,
+        devices: record.accountDevices
+      });
       await flushMailbox(socket, message.userID, context);
+      await broadcastSyncRequest(socket, message, context);
       break;
     case "send":
-      await forwardEnvelope(socket, message.envelope, Boolean(message.transient), context);
+      await forwardEnvelope(socket, message.envelope, Boolean(message.transient), context, message.targetDeviceID);
       break;
     case "pushSubscribe":
       await savePushSubscription(urlUserID, message.subscription, context);
@@ -243,9 +258,58 @@ async function registerProfile(message, context) {
   await context.store.setUser(userID, record);
 }
 
-async function forwardEnvelope(socket, envelope, transient, context) {
+async function registerDevice(message, context) {
+  const userID = cleanID(message.userID);
+  const deviceID = cleanDeviceID(message.deviceID);
+  if (!userID || !deviceID) {
+    return;
+  }
+  const now = new Date().toISOString();
+  const record = await context.store.getUser(userID);
+  const existing = record.accountDevices.find(device => device.deviceID === deviceID);
+  record.accountDevices = record.accountDevices.filter(device => device.deviceID !== deviceID);
+  record.accountDevices.push({
+    deviceID,
+    userID,
+    deviceName: sanitizeDeviceName(message.deviceName),
+    createdAt: existing?.createdAt || now,
+    lastSeenAt: now
+  });
+  while (record.accountDevices.length > 16) {
+    record.accountDevices.shift();
+  }
+  await context.store.setUser(userID, record);
+}
+
+async function broadcastSyncRequest(socket, message, context) {
+  const requesterDeviceID = cleanDeviceID(message.deviceID);
+  if (!requesterDeviceID) {
+    return;
+  }
+  const cursor = normalizeSyncCursor(message.syncCursor);
+  const peers = [...(context.socketsByUser.get(message.userID) || [])];
+  for (const peer of peers) {
+    if (peer === socket) {
+      continue;
+    }
+    const peerDeviceID = context.socketDevices.get(peer) || "";
+    if (!peerDeviceID || peerDeviceID === requesterDeviceID) {
+      continue;
+    }
+    safeSend(peer, {
+      type: "syncRequest",
+      requesterDeviceID,
+      cursor
+    });
+  }
+}
+
+async function forwardEnvelope(socket, envelope, transient, context, targetDeviceID) {
   validateEnvelope(envelope);
-  const result = await deliver(envelope, transient, context);
+  const result = await deliver(envelope, transient, context, {
+    sourceDeviceID: context.socketDevices.get(socket) || "",
+    targetDeviceID
+  });
   safeSend(socket, {
     type: "sent",
     id: envelope.id,
@@ -257,17 +321,38 @@ async function forwardEnvelope(socket, envelope, transient, context) {
   });
 }
 
-async function deliver(envelope, transient, context) {
+async function deliver(envelope, transient, context, routing = {}) {
   validateEnvelope(envelope);
   await expireIdleAccountIfNeeded(envelope.to, context);
   const recipientSockets = [...(context.socketsByUser.get(envelope.to) || [])];
+  const sourceDeviceID = cleanDeviceID(routing.sourceDeviceID);
+  const targetDeviceID = cleanDeviceID(routing.targetDeviceID);
 
   let delivered = false;
+  const deliveredDeviceIDs = new Set();
   for (const socket of recipientSockets) {
+    const deviceID = context.socketDevices.get(socket) || "";
+    if (targetDeviceID && deviceID !== targetDeviceID) {
+      continue;
+    }
+    if (sourceDeviceID && deviceID === sourceDeviceID) {
+      continue;
+    }
     if (safeSend(socket, { type: "envelope", envelope })) {
       delivered = true;
+      if (deviceID) {
+        deliveredDeviceIDs.add(deviceID);
+      }
     } else {
       await handleSocketClosed(socket, context);
+    }
+  }
+
+  const record = await context.store.getUser(envelope.to);
+  if (record.accountDevices.length > 0 && !transient) {
+    const queued = await queueForMissingDevices(envelope, record, deliveredDeviceIDs, sourceDeviceID, targetDeviceID, context);
+    if (delivered || queued) {
+      return { delivered, queued };
     }
   }
 
@@ -284,7 +369,6 @@ async function deliver(envelope, transient, context) {
     return { delivered: false, queued: false, dropped: true, reason: "envelope too large for offline queue" };
   }
 
-  const record = await context.store.getUser(envelope.to);
   record.mailbox.push(envelope);
   while (record.mailbox.length > MAX_MAILBOX_ITEMS) {
     record.mailbox.shift();
@@ -296,7 +380,17 @@ async function deliver(envelope, transient, context) {
 
 async function flushMailbox(socket, userID, context) {
   const record = await context.store.getUser(userID);
+  const deviceID = context.socketDevices.get(socket) || "";
+  if (deviceID) {
+    const mailbox = Array.isArray(record.deviceMailboxes[deviceID]) ? record.deviceMailboxes[deviceID] : [];
+    for (const envelope of mailbox) {
+      safeSend(socket, { type: "envelope", envelope });
+    }
+    delete record.deviceMailboxes[deviceID];
+  }
+
   if (record.mailbox.length === 0) {
+    await context.store.setUser(userID, record);
     return;
   }
 
@@ -305,6 +399,37 @@ async function flushMailbox(socket, userID, context) {
   }
   record.mailbox = [];
   await context.store.setUser(userID, record);
+}
+
+async function queueForMissingDevices(envelope, record, deliveredDeviceIDs, sourceDeviceID, targetDeviceID, context) {
+  const size = JSON.stringify(envelope).length;
+  if (size > MAX_QUEUED_ENVELOPE_BYTES) {
+    return false;
+  }
+  const recipients = record.accountDevices.filter(device => {
+    if (!device.deviceID) {
+      return false;
+    }
+    if (targetDeviceID) {
+      return device.deviceID === targetDeviceID;
+    }
+    return device.deviceID !== sourceDeviceID;
+  });
+  const missing = recipients.filter(device => !deliveredDeviceIDs.has(device.deviceID));
+  if (missing.length === 0) {
+    return false;
+  }
+  for (const device of missing) {
+    const mailbox = Array.isArray(record.deviceMailboxes[device.deviceID]) ? record.deviceMailboxes[device.deviceID] : [];
+    mailbox.push(envelope);
+    while (mailbox.length > MAX_DEVICE_MAILBOX_ITEMS) {
+      mailbox.shift();
+    }
+    record.deviceMailboxes[device.deviceID] = mailbox;
+  }
+  await context.store.setUser(envelope.to, record);
+  await sendGenericPushes(envelope.to, context);
+  return true;
 }
 
 async function savePushSubscription(userID, subscription, context) {
@@ -362,8 +487,12 @@ async function sendGenericPushes(userID, context) {
   return sent;
 }
 
-async function markSocketOnline(socket, userID, context) {
+async function markSocketOnline(socket, userID, context, deviceID) {
   context.socketUsers.set(socket, userID);
+  const cleanDevice = cleanDeviceID(deviceID);
+  if (cleanDevice) {
+    context.socketDevices.set(socket, cleanDevice);
+  }
   if (!context.socketsByUser.has(userID)) {
     context.socketsByUser.set(userID, new Set());
   }
@@ -383,6 +512,7 @@ async function markSocketOnline(socket, userID, context) {
 async function handleSocketClosed(socket, context) {
   const userID = context.socketUsers.get(socket);
   context.socketUsers.delete(socket);
+  context.socketDevices.delete(socket);
   if (!userID) {
     return;
   }
@@ -618,7 +748,10 @@ async function serveStatic(response, requestPath) {
   const resolved = path.resolve(STATIC_ROOT, safePath || "index.html");
   const target = resolved.startsWith(STATIC_ROOT) && existsSync(resolved) ? resolved : path.join(STATIC_ROOT, "index.html");
   try {
-    const body = await readFile(target);
+    let body = await readFile(target);
+    if (target.endsWith(".js")) {
+      body = Buffer.from(patchDirectChatWebBundle(body.toString("utf8")), "utf8");
+    }
     response.writeHead(200, {
       "Content-Type": contentTypeFor(target),
       "Cache-Control": target.endsWith("index.html") ? "no-store" : "public, max-age=31536000, immutable"
@@ -627,6 +760,18 @@ async function serveStatic(response, requestPath) {
   } catch {
     sendJSON(response, { ok: true, endpoints: ["/health", "/identity/<directchat-id>", "/ws/<directchat-id>"] });
   }
+}
+
+function patchDirectChatWebBundle(source) {
+  return source
+    .replace(
+      "Message to ${O.to||\"recipient\"} is queued and still pending.",
+      "Message sent to the relay. ${O.to||\"Recipient\"} will receive it when online."
+    )
+    .replace(
+      'return i.dropped?"failed":i.delivered?"sent":"pending"',
+      'return i.dropped?"failed":i.delivered||i.queued?"sent":"pending"'
+    );
 }
 
 function contentTypeFor(filePath) {
@@ -701,6 +846,8 @@ function normalizeRecord(raw) {
     profile: value.profile || null,
     accountVault: value.accountVault || null,
     mailbox: Array.isArray(value.mailbox) ? value.mailbox : [],
+    accountDevices: Array.isArray(value.accountDevices) ? value.accountDevices.filter(device => cleanDeviceID(device?.deviceID)) : [],
+    deviceMailboxes: value.deviceMailboxes && typeof value.deviceMailboxes === "object" ? value.deviceMailboxes : {},
     pushSubscriptions: Array.isArray(value.pushSubscriptions) ? value.pushSubscriptions : [],
     lastPushAt: Number(value.lastPushAt || 0),
     accountPresence: value.accountPresence || null
@@ -750,6 +897,27 @@ function corsHeaders() {
 function cleanID(value) {
   const trimmed = String(value || "").trim().toUpperCase();
   return /^[A-Z0-9-]{6,40}$/.test(trimmed) ? trimmed : "";
+}
+
+function cleanDeviceID(value) {
+  const trimmed = String(value || "").trim();
+  return /^[A-Za-z0-9:_-]{1,96}$/.test(trimmed) ? trimmed : "";
+}
+
+function sanitizeDeviceName(value) {
+  const trimmed = String(value || "").trim();
+  return trimmed ? trimmed.slice(0, 80) : "DirectChat device";
+}
+
+function normalizeSyncCursor(value) {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([key, seq]) => cleanDeviceID(key) && typeof seq === "number" && Number.isFinite(seq) && seq >= 0)
+      .map(([key, seq]) => [key, Math.floor(seq)])
+  );
 }
 
 function safeSend(socket, value) {
