@@ -1,11 +1,14 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Redis } from "@upstash/redis";
 import { WebSocket, WebSocketServer } from "ws";
 
+const MIN_CLIENT_PROTOCOL_VERSION = 2;
+const CLIENT_PROTOCOL_HEADER = "X-DirectChat-Protocol";
 const MAX_MAILBOX_ITEMS = 100;
 const MAX_DEVICE_MAILBOX_ITEMS = 100;
 const MAX_QUEUED_ENVELOPE_BYTES = 64 * 1024;
@@ -65,7 +68,8 @@ async function handleHTTP(request, response, context) {
       ok: true,
       service: "directchat-relay",
       runtime: "render-upstash",
-      syncProtocol: "device-cursor-v1"
+      syncProtocol: "privacy-gated-v2",
+      minClientProtocolVersion: MIN_CLIENT_PROTOCOL_VERSION
     });
     return;
   }
@@ -79,11 +83,17 @@ async function handleHTTP(request, response, context) {
   }
 
   if (url.pathname.startsWith("/api/accounts/")) {
+    if (!requireSupportedClientProtocol(request, response)) {
+      return;
+    }
     await handleAccountHTTP(request, response, url, context);
     return;
   }
 
   if (url.pathname.startsWith("/identity/")) {
+    if (!requireSupportedClientProtocol(request, response)) {
+      return;
+    }
     const userID = cleanID(url.pathname.slice("/identity/".length));
     if (!userID) {
       sendJSON(response, { error: "missing user id" }, 400);
@@ -164,6 +174,7 @@ async function handleAccountHTTP(request, response, url, context) {
 
   const record = await context.store.getUser(userID);
   const account = validateAccountVault(body);
+  assertPublicKeyMatchesUserID(account.userID, account.publicKeyBase64);
   if (record.accountVault && !constantTimeEqual(record.accountVault.authVerifierBase64, account.authVerifierBase64)) {
     sendJSON(response, { error: "invalid account safety code" }, 403);
     return;
@@ -203,10 +214,20 @@ function attachSocket(socket, urlUserID, context) {
 
 async function handleSocketMessage(socket, urlUserID, data, context) {
   const message = JSON.parse(String(data));
+  if (message.type !== "hello" && message.type !== "ping" && !context.socketUsers.has(socket)) {
+    safeSend(socket, unsupportedClientMessage("Complete a supported DirectChat handshake before using the relay."));
+    closeSocket(socket);
+    return;
+  }
   switch (message.type) {
     case "hello":
       if (message.userID !== urlUserID) {
         throw new Error("websocket user id mismatch");
+      }
+      if (!isSupportedClientProtocol(message.protocolVersion)) {
+        safeSend(socket, unsupportedClientMessage());
+        closeSocket(socket);
+        return;
       }
       await registerProfile(message, context);
       await registerDevice(message, context);
@@ -248,6 +269,7 @@ async function registerProfile(message, context) {
   if (!message.publicKeyBase64 || message.publicKeyBase64.length > 2048) {
     throw new Error("missing public key");
   }
+  assertPublicKeyMatchesUserID(userID, message.publicKeyBase64);
 
   const record = await context.store.getUser(userID);
   record.profile = {
@@ -306,6 +328,10 @@ async function broadcastSyncRequest(socket, message, context) {
 
 async function forwardEnvelope(socket, envelope, transient, context, targetDeviceID) {
   validateEnvelope(envelope);
+  const socketUserID = context.socketUsers.get(socket);
+  if (!socketUserID || envelope.from !== socketUserID) {
+    throw new Error("sender mismatch");
+  }
   const result = await deliver(envelope, transient, context, {
     sourceDeviceID: context.socketDevices.get(socket) || "",
     targetDeviceID
@@ -585,6 +611,57 @@ async function expireIdleAccountIfNeeded(userID, context) {
 
 function storedUserID(record) {
   return record.accountVault?.userID || record.profile?.userID || "";
+}
+
+function requireSupportedClientProtocol(request, response) {
+  if (isSupportedClientProtocol(request.headers[CLIENT_PROTOCOL_HEADER.toLowerCase()])) {
+    return true;
+  }
+  sendJSON(response, unsupportedClientMessage(), 426);
+  return false;
+}
+
+function isSupportedClientProtocol(value) {
+  const version = Number.parseInt(String(value || ""), 10);
+  return Number.isFinite(version) && version >= MIN_CLIENT_PROTOCOL_VERSION;
+}
+
+function unsupportedClientMessage(message = "Update DirectChat before using this relay.") {
+  return {
+    type: "error",
+    code: "upgrade_required",
+    error: "upgrade_required",
+    message,
+    minClientProtocolVersion: MIN_CLIENT_PROTOCOL_VERSION
+  };
+}
+
+function closeSocket(socket) {
+  try {
+    socket.close(1008, "upgrade required");
+  } catch {
+    // Some runtimes throw if the socket is already closing.
+  }
+}
+
+function assertPublicKeyMatchesUserID(userID, publicKeyBase64) {
+  const expectedID = directChatIDForPublicKey(publicKeyBase64);
+  if (expectedID !== userID) {
+    throw new Error("public key does not match DirectChat ID");
+  }
+}
+
+function directChatIDForPublicKey(publicKeyBase64) {
+  const bytes = Buffer.from(String(publicKeyBase64 || ""), "base64");
+  let compact;
+  if (bytes.length === 65 && bytes[0] === 0x04) {
+    compact = bytes.subarray(1);
+  } else if (bytes.length === 64) {
+    compact = bytes;
+  } else {
+    throw new Error("unsupported public key format");
+  }
+  return `DC-${createHash("sha256").update(compact).digest("hex").slice(0, 12).toUpperCase()}`;
 }
 
 function validateEnvelope(envelope) {
@@ -890,7 +967,7 @@ function corsHeaders() {
   return {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET, POST, PUT, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Headers": `Content-Type, ${CLIENT_PROTOCOL_HEADER}`
   };
 }
 
