@@ -201,6 +201,7 @@ async function handleAccountHTTP(request, response, url, context) {
   };
   record.profile = {
     userID: account.userID,
+    displayName: sanitizeDisplayName(account.displayName) || record.profile?.displayName || "",
     publicKeyBase64: account.publicKeyBase64,
     updatedAt: now
   };
@@ -701,7 +702,7 @@ async function collectAdminOverview(context) {
     const storageBytes = byteLengthJSON(record);
     users.push({
       userID,
-      displayName: record.profile?.displayName || "",
+      displayName: record.profile?.displayName || record.accountVault?.displayName || "",
       onlineSessions: activeSessionCount(userID, context),
       devices: record.accountDevices.map(device => ({
         deviceID: device.deviceID,
@@ -880,6 +881,7 @@ function validateAccountVault(body) {
 
   return {
     userID,
+    displayName: sanitizeDisplayName(body.displayName),
     publicKeyBase64: body.publicKeyBase64,
     authVerifierBase64: body.authVerifierBase64,
     kdf: {
