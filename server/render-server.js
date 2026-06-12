@@ -9,6 +9,7 @@ import { WebSocket, WebSocketServer } from "ws";
 
 const MIN_CLIENT_PROTOCOL_VERSION = 2;
 const CLIENT_PROTOCOL_HEADER = "X-DirectChat-Protocol";
+const SERVER_BUILD = "display-name-v4";
 const MAX_MAILBOX_ITEMS = 100;
 const MAX_DEVICE_MAILBOX_ITEMS = 100;
 const MAX_QUEUED_ENVELOPE_BYTES = 64 * 1024;
@@ -69,7 +70,8 @@ async function handleHTTP(request, response, context) {
       service: "directchat-relay",
       runtime: "render-upstash",
       syncProtocol: "privacy-gated-v2",
-      minClientProtocolVersion: MIN_CLIENT_PROTOCOL_VERSION
+      minClientProtocolVersion: MIN_CLIENT_PROTOCOL_VERSION,
+      serverBuild: SERVER_BUILD
     });
     return;
   }
@@ -142,7 +144,7 @@ async function handleAccountHTTP(request, response, url, context) {
     sendJSON(response, { error: "missing account id" }, 400);
     return;
   }
-  if (!["challenge", "login", "vault"].includes(action)) {
+  if (!["challenge", "login", "vault", "display-name"].includes(action)) {
     sendJSON(response, { error: "unknown account endpoint" }, 404);
     return;
   }
@@ -186,6 +188,38 @@ async function handleAccountHTTP(request, response, url, context) {
   }
 
   const record = await context.store.getUser(userID);
+  if (action === "display-name") {
+    if (!record.accountVault) {
+      sendJSON(response, { error: "unknown account" }, 404);
+      return;
+    }
+    if (!constantTimeEqual(String(body?.authVerifierBase64 || ""), record.accountVault.authVerifierBase64)) {
+      sendJSON(response, { error: "invalid account safety code" }, 403);
+      return;
+    }
+    const displayName = sanitizeDisplayName(body?.displayName);
+    if (!displayName) {
+      sendJSON(response, { error: "invalid display name" }, 400);
+      return;
+    }
+    const now = new Date().toISOString();
+    record.accountVault = {
+      ...record.accountVault,
+      displayName,
+      updatedAt: now
+    };
+    record.profile = {
+      userID: record.accountVault.userID,
+      displayName: bestProfileDisplayName(displayName, record),
+      publicKeyBase64: record.accountVault.publicKeyBase64,
+      updatedAt: now
+    };
+    await context.store.setUser(userID, record);
+    await touchOfflineAccountActivity(userID, context);
+    sendJSON(response, { ok: true, userID: record.accountVault.userID, displayName: record.profile.displayName, updatedAt: now });
+    return;
+  }
+
   const account = validateAccountVault(body);
   assertPublicKeyMatchesUserID(account.userID, account.publicKeyBase64);
   if (record.accountVault && !constantTimeEqual(record.accountVault.authVerifierBase64, account.authVerifierBase64)) {
@@ -721,6 +755,7 @@ async function collectAdminOverview(context) {
   return {
     generatedAt: new Date().toISOString(),
     runtime: "render-upstash",
+    serverBuild: SERVER_BUILD,
     users,
     totals: users.reduce((totals, user) => ({
       users: totals.users + 1,
@@ -1015,6 +1050,7 @@ function serveAdminDashboard(response) {
   <title>DirectChat Admin</title>
   <style>
     :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #111827; }
+    [hidden] { display: none !important; }
     body { margin: 0; min-height: 100vh; background: #f6f7f9; color: #111827; }
     header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px clamp(16px, 4vw, 40px); border-bottom: 1px solid #e5e7eb; background: #fff; }
     h1 { margin: 0; font-size: clamp(22px, 3vw, 34px); letter-spacing: 0; }
@@ -1137,7 +1173,7 @@ function serveAdminDashboard(response) {
       dashboard.hidden = false;
       document.getElementById("privacy").textContent = data.privacy;
       document.getElementById("generated-at").textContent = "Updated " + new Date(data.generatedAt).toLocaleString();
-      document.getElementById("subtitle").textContent = data.runtime + " - " + data.users.length + " users";
+      document.getElementById("subtitle").textContent = data.runtime + " - " + (data.serverBuild || "unknown-build") + " - " + data.users.length + " users";
       document.getElementById("total-users").textContent = data.totals.users;
       document.getElementById("total-online").textContent = data.totals.onlineSessions;
       document.getElementById("total-queued").textContent = data.totals.queuedEnvelopeCount;
