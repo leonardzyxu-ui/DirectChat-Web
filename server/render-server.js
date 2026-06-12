@@ -201,7 +201,7 @@ async function handleAccountHTTP(request, response, url, context) {
   };
   record.profile = {
     userID: account.userID,
-    displayName: sanitizeDisplayName(account.displayName) || record.profile?.displayName || "",
+    displayName: bestProfileDisplayName(account.displayName, record),
     publicKeyBase64: account.publicKeyBase64,
     updatedAt: now
   };
@@ -288,7 +288,7 @@ async function registerProfile(message, context) {
   const record = await context.store.getUser(userID);
   record.profile = {
     userID,
-    displayName: sanitizeDisplayName(message.displayName),
+    displayName: bestProfileDisplayName(message.displayName, record),
     publicKeyBase64: message.publicKeyBase64,
     updatedAt: new Date().toISOString()
   };
@@ -702,7 +702,7 @@ async function collectAdminOverview(context) {
     const storageBytes = byteLengthJSON(record);
     users.push({
       userID,
-      displayName: record.profile?.displayName || record.accountVault?.displayName || "",
+      displayName: dashboardDisplayName(record),
       onlineSessions: activeSessionCount(userID, context),
       devices: record.accountDevices.map(device => ({
         deviceID: device.deviceID,
@@ -1341,6 +1341,39 @@ function sanitizeDeviceName(value) {
 function sanitizeDisplayName(value) {
   const trimmed = String(value || "").trim();
   return trimmed ? trimmed.slice(0, 80) : "";
+}
+
+function dashboardDisplayName(record) {
+  const profileName = sanitizeDisplayName(record.profile?.displayName);
+  const accountName = sanitizeDisplayName(record.accountVault?.displayName);
+  if (isUsefulDisplayName(profileName)) {
+    return profileName;
+  }
+  if (isUsefulDisplayName(accountName)) {
+    return accountName;
+  }
+  return "";
+}
+
+function bestProfileDisplayName(incoming, record) {
+  const incomingName = sanitizeDisplayName(incoming);
+  const existingName = sanitizeDisplayName(record.profile?.displayName);
+  const accountName = sanitizeDisplayName(record.accountVault?.displayName);
+  if (isUsefulDisplayName(incomingName)) {
+    return incomingName;
+  }
+  if (isUsefulDisplayName(existingName)) {
+    return existingName;
+  }
+  if (isUsefulDisplayName(accountName)) {
+    return accountName;
+  }
+  return incomingName || existingName || accountName || "";
+}
+
+function isUsefulDisplayName(value) {
+  const normalized = sanitizeDisplayName(value).toLowerCase();
+  return Boolean(normalized && normalized !== "me" && normalized !== "directchat");
 }
 
 function normalizeSyncCursor(value) {
