@@ -82,6 +82,19 @@ async function handleHTTP(request, response, context) {
     return;
   }
 
+  if (url.pathname === "/admin") {
+    serveAdminDashboard(response);
+    return;
+  }
+
+  if (url.pathname === "/api/admin/overview") {
+    if (!requireAdmin(request, response)) {
+      return;
+    }
+    sendJSON(response, await collectAdminOverview(context));
+    return;
+  }
+
   if (url.pathname.startsWith("/api/accounts/")) {
     if (!requireSupportedClientProtocol(request, response)) {
       return;
@@ -274,6 +287,7 @@ async function registerProfile(message, context) {
   const record = await context.store.getUser(userID);
   record.profile = {
     userID,
+    displayName: sanitizeDisplayName(message.displayName),
     publicKeyBase64: message.publicKeyBase64,
     updatedAt: new Date().toISOString()
   };
@@ -332,6 +346,11 @@ async function forwardEnvelope(socket, envelope, transient, context, targetDevic
   if (!socketUserID || envelope.from !== socketUserID) {
     throw new Error("sender mismatch");
   }
+  const envelopeBytes = byteLengthJSON(envelope);
+  await noteUserUsage(envelope.from, context, {
+    outboundEnvelopes: 1,
+    outboundBytes: envelopeBytes
+  });
   const result = await deliver(envelope, transient, context, {
     sourceDeviceID: context.socketDevices.get(socket) || "",
     targetDeviceID
@@ -349,6 +368,7 @@ async function forwardEnvelope(socket, envelope, transient, context, targetDevic
 
 async function deliver(envelope, transient, context, routing = {}) {
   validateEnvelope(envelope);
+  const envelopeBytes = byteLengthJSON(envelope);
   await expireIdleAccountIfNeeded(envelope.to, context);
   const recipientSockets = [...(context.socketsByUser.get(envelope.to) || [])];
   const sourceDeviceID = cleanDeviceID(routing.sourceDeviceID);
@@ -375,27 +395,42 @@ async function deliver(envelope, transient, context, routing = {}) {
   }
 
   const record = await context.store.getUser(envelope.to);
+  record.usageStats = mergeUsageStats(record.usageStats, {
+    inboundEnvelopes: 1,
+    inboundBytes: envelopeBytes
+  });
   if (record.accountDevices.length > 0 && !transient) {
     const queued = await queueForMissingDevices(envelope, record, deliveredDeviceIDs, sourceDeviceID, targetDeviceID, context);
+    record.usageStats = mergeUsageStats(record.usageStats, {
+      deliveredLive: delivered ? 1 : 0,
+      queuedEnvelopes: queued ? 1 : 0
+    });
     if (delivered || queued) {
+      await context.store.setUser(envelope.to, record);
       return { delivered, queued };
     }
   }
 
   if (delivered) {
+    record.usageStats = mergeUsageStats(record.usageStats, { deliveredLive: 1 });
+    await context.store.setUser(envelope.to, record);
     return { delivered: true, queued: false };
   }
 
   if (transient) {
+    record.usageStats = mergeUsageStats(record.usageStats, { droppedEnvelopes: 1 });
+    await context.store.setUser(envelope.to, record);
     return { delivered: false, queued: false, dropped: true, reason: "recipient offline" };
   }
 
-  const size = JSON.stringify(envelope).length;
-  if (size > MAX_QUEUED_ENVELOPE_BYTES) {
+  if (envelopeBytes > MAX_QUEUED_ENVELOPE_BYTES) {
+    record.usageStats = mergeUsageStats(record.usageStats, { droppedEnvelopes: 1 });
+    await context.store.setUser(envelope.to, record);
     return { delivered: false, queued: false, dropped: true, reason: "envelope too large for offline queue" };
   }
 
   record.mailbox.push(envelope);
+  record.usageStats = mergeUsageStats(record.usageStats, { queuedEnvelopes: 1 });
   while (record.mailbox.length > MAX_MAILBOX_ITEMS) {
     record.mailbox.shift();
   }
@@ -611,6 +646,132 @@ async function expireIdleAccountIfNeeded(userID, context) {
 
 function storedUserID(record) {
   return record.accountVault?.userID || record.profile?.userID || "";
+}
+
+async function noteUserUsage(userID, context, patch) {
+  const record = await context.store.getUser(userID);
+  if (!storedUserID(record) && !record.profile) {
+    return;
+  }
+  record.usageStats = mergeUsageStats(record.usageStats, patch);
+  await context.store.setUser(userID, record);
+}
+
+function mergeUsageStats(existing, patch) {
+  const current = normalizeUsageStats(existing);
+  const now = new Date().toISOString();
+  return {
+    ...current,
+    outboundEnvelopes: current.outboundEnvelopes + Number(patch.outboundEnvelopes || 0),
+    outboundBytes: current.outboundBytes + Number(patch.outboundBytes || 0),
+    inboundEnvelopes: current.inboundEnvelopes + Number(patch.inboundEnvelopes || 0),
+    inboundBytes: current.inboundBytes + Number(patch.inboundBytes || 0),
+    queuedEnvelopes: current.queuedEnvelopes + Number(patch.queuedEnvelopes || 0),
+    droppedEnvelopes: current.droppedEnvelopes + Number(patch.droppedEnvelopes || 0),
+    deliveredLive: current.deliveredLive + Number(patch.deliveredLive || 0),
+    firstSeenAt: current.firstSeenAt || now,
+    updatedAt: now
+  };
+}
+
+function normalizeUsageStats(value) {
+  const stats = value && typeof value === "object" ? value : {};
+  return {
+    outboundEnvelopes: safeNumber(stats.outboundEnvelopes),
+    outboundBytes: safeNumber(stats.outboundBytes),
+    inboundEnvelopes: safeNumber(stats.inboundEnvelopes),
+    inboundBytes: safeNumber(stats.inboundBytes),
+    queuedEnvelopes: safeNumber(stats.queuedEnvelopes),
+    droppedEnvelopes: safeNumber(stats.droppedEnvelopes),
+    deliveredLive: safeNumber(stats.deliveredLive),
+    firstSeenAt: typeof stats.firstSeenAt === "string" ? stats.firstSeenAt : null,
+    updatedAt: typeof stats.updatedAt === "string" ? stats.updatedAt : null
+  };
+}
+
+async function collectAdminOverview(context) {
+  const userIDs = typeof context.store.listUserIDs === "function" ? await context.store.listUserIDs() : [];
+  const users = [];
+  for (const userID of userIDs.map(cleanID).filter(Boolean).sort()) {
+    const record = await context.store.getUser(userID);
+    if (!storedUserID(record)) {
+      continue;
+    }
+    const queued = queuedEnvelopeStats(record);
+    const storageBytes = byteLengthJSON(record);
+    users.push({
+      userID,
+      displayName: record.profile?.displayName || "",
+      onlineSessions: activeSessionCount(userID, context),
+      devices: record.accountDevices.map(device => ({
+        deviceID: device.deviceID,
+        deviceName: device.deviceName || "DirectChat device",
+        lastSeenAt: device.lastSeenAt || null
+      })),
+      hasAccountVault: Boolean(record.accountVault),
+      queuedEnvelopeCount: queued.count,
+      queuedBytes: queued.bytes,
+      storageBytes,
+      pushSubscriptions: record.pushSubscriptions.length,
+      presence: record.accountPresence,
+      usage: normalizeUsageStats(record.usageStats)
+    });
+  }
+  return {
+    generatedAt: new Date().toISOString(),
+    runtime: "render-upstash",
+    users,
+    totals: users.reduce((totals, user) => ({
+      users: totals.users + 1,
+      onlineSessions: totals.onlineSessions + user.onlineSessions,
+      devices: totals.devices + user.devices.length,
+      queuedEnvelopeCount: totals.queuedEnvelopeCount + user.queuedEnvelopeCount,
+      queuedBytes: totals.queuedBytes + user.queuedBytes,
+      storageBytes: totals.storageBytes + user.storageBytes,
+      inboundBytes: totals.inboundBytes + user.usage.inboundBytes,
+      outboundBytes: totals.outboundBytes + user.usage.outboundBytes
+    }), {
+      users: 0,
+      onlineSessions: 0,
+      devices: 0,
+      queuedEnvelopeCount: 0,
+      queuedBytes: 0,
+      storageBytes: 0,
+      inboundBytes: 0,
+      outboundBytes: 0
+    }),
+    privacy: "Dashboard shows relay metadata only. Account vaults, messages, file names, file bytes, private keys, and safety codes are not returned."
+  };
+}
+
+function queuedEnvelopeStats(record) {
+  const envelopes = [...record.mailbox];
+  for (const mailbox of Object.values(record.deviceMailboxes)) {
+    if (Array.isArray(mailbox)) {
+      envelopes.push(...mailbox);
+    }
+  }
+  return {
+    count: envelopes.length,
+    bytes: envelopes.reduce((sum, envelope) => sum + byteLengthJSON(envelope), 0)
+  };
+}
+
+function requireAdmin(request, response) {
+  const token = process.env.DIRECTCHAT_ADMIN_TOKEN || "";
+  if (!token) {
+    sendJSON(response, { error: "admin dashboard is not configured" }, 503);
+    return false;
+  }
+  const authorization = String(request.headers.authorization || "");
+  const candidate = authorization.toLowerCase().startsWith("bearer ")
+    ? authorization.slice(7).trim()
+    : String(request.headers["x-directchat-admin-token"] || "");
+  if (!constantTimeEqual(candidate, token)) {
+    sendJSON(response, { error: "unauthorized" }, 401);
+    return false;
+  }
+  return true;
 }
 
 function requireSupportedClientProtocol(request, response) {
@@ -839,6 +1000,176 @@ async function serveStatic(response, requestPath) {
   }
 }
 
+function serveAdminDashboard(response) {
+  response.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  response.end(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DirectChat Admin</title>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #111827; }
+    body { margin: 0; min-height: 100vh; background: #f6f7f9; color: #111827; }
+    header { display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px clamp(16px, 4vw, 40px); border-bottom: 1px solid #e5e7eb; background: #fff; }
+    h1 { margin: 0; font-size: clamp(22px, 3vw, 34px); letter-spacing: 0; }
+    main { width: min(1180px, calc(100vw - 28px)); margin: 20px auto 40px; display: grid; gap: 16px; }
+    .login, .panel, .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 8px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.05); }
+    .login { display: grid; gap: 12px; max-width: 440px; margin: 12vh auto 0; padding: 18px; }
+    .login input { height: 42px; padding: 0 12px; border: 1px solid #d1d5db; border-radius: 8px; font: inherit; }
+    button { height: 38px; padding: 0 14px; border: 0; border-radius: 8px; background: #0f172a; color: #fff; font-weight: 750; cursor: pointer; }
+    button.secondary { background: #e5e7eb; color: #111827; }
+    .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+    .card { padding: 14px; }
+    .card span { display: block; color: #6b7280; font-size: 12px; font-weight: 750; text-transform: uppercase; }
+    .card strong { display: block; margin-top: 5px; font-size: 24px; }
+    .panel { overflow: hidden; }
+    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #e5e7eb; }
+    .table-wrap { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 920px; }
+    th, td { padding: 11px 12px; border-bottom: 1px solid #edf0f3; text-align: left; font-size: 13px; vertical-align: top; }
+    th { color: #6b7280; font-size: 11px; text-transform: uppercase; letter-spacing: 0; background: #fafafa; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+    .muted { color: #6b7280; }
+    .ok { color: #047857; font-weight: 800; }
+    .warn { color: #b45309; font-weight: 800; }
+    .danger { color: #b91c1c; font-weight: 800; }
+    .privacy { padding: 12px 14px; color: #4b5563; background: #eef6ff; border: 1px solid #bfdbfe; border-radius: 8px; font-size: 13px; }
+    @media (max-width: 760px) { header { align-items: flex-start; flex-direction: column; } .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (prefers-color-scheme: dark) {
+      :root, body { background: #0b1020; color: #e5e7eb; }
+      header, .login, .panel, .card { background: #111827; border-color: #263245; box-shadow: none; }
+      th { background: #0f172a; color: #9ca3af; }
+      th, td, .panel-head { border-color: #263245; }
+      .login input { background: #0f172a; color: #e5e7eb; border-color: #374151; }
+      button.secondary { background: #263245; color: #e5e7eb; }
+      .muted { color: #9ca3af; }
+      .privacy { background: #10243f; border-color: #1d4ed8; color: #bfdbfe; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>DirectChat Admin</h1>
+      <div class="muted" id="subtitle">Relay metadata monitor</div>
+    </div>
+    <div>
+      <button class="secondary" id="refresh">Refresh</button>
+      <button class="secondary" id="logout">Lock</button>
+    </div>
+  </header>
+  <main>
+    <section class="login" id="login">
+      <strong>Admin token required</strong>
+      <span class="muted">Set DIRECTCHAT_ADMIN_TOKEN on Render. The token stays in this browser session.</span>
+      <input id="token" type="password" autocomplete="current-password" placeholder="Admin token" />
+      <button id="unlock">Open dashboard</button>
+      <span class="danger" id="login-error"></span>
+    </section>
+    <section id="dashboard" hidden>
+      <div class="privacy" id="privacy"></div>
+      <div class="cards">
+        <div class="card"><span>Users</span><strong id="total-users">0</strong></div>
+        <div class="card"><span>Online sessions</span><strong id="total-online">0</strong></div>
+        <div class="card"><span>Queued envelopes</span><strong id="total-queued">0</strong></div>
+        <div class="card"><span>Storage estimate</span><strong id="total-storage">0 B</strong></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <strong>Users</strong>
+          <span class="muted" id="generated-at"></span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Name</th><th>ID</th><th>Status</th><th>Devices</th><th>Queued</th><th>Traffic</th><th>Storage</th><th>Last Seen</th>
+              </tr>
+            </thead>
+            <tbody id="users"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const tokenInput = document.getElementById("token");
+    const login = document.getElementById("login");
+    const dashboard = document.getElementById("dashboard");
+    const loginError = document.getElementById("login-error");
+    const stored = sessionStorage.getItem("directchat_admin_token");
+    if (stored) {
+      tokenInput.value = stored;
+      loadDashboard();
+    }
+    document.getElementById("unlock").addEventListener("click", () => {
+      sessionStorage.setItem("directchat_admin_token", tokenInput.value);
+      loadDashboard();
+    });
+    document.getElementById("refresh").addEventListener("click", loadDashboard);
+    document.getElementById("logout").addEventListener("click", () => {
+      sessionStorage.removeItem("directchat_admin_token");
+      dashboard.hidden = true;
+      login.hidden = false;
+      tokenInput.value = "";
+    });
+    async function loadDashboard() {
+      const token = sessionStorage.getItem("directchat_admin_token") || tokenInput.value;
+      loginError.textContent = "";
+      const response = await fetch("/api/admin/overview", {
+        headers: { Authorization: "Bearer " + token },
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        login.hidden = false;
+        dashboard.hidden = true;
+        loginError.textContent = response.status === 503 ? "Set DIRECTCHAT_ADMIN_TOKEN on Render first." : "Token rejected.";
+        return;
+      }
+      const data = await response.json();
+      login.hidden = true;
+      dashboard.hidden = false;
+      document.getElementById("privacy").textContent = data.privacy;
+      document.getElementById("generated-at").textContent = "Updated " + new Date(data.generatedAt).toLocaleString();
+      document.getElementById("subtitle").textContent = data.runtime + " - " + data.users.length + " users";
+      document.getElementById("total-users").textContent = data.totals.users;
+      document.getElementById("total-online").textContent = data.totals.onlineSessions;
+      document.getElementById("total-queued").textContent = data.totals.queuedEnvelopeCount;
+      document.getElementById("total-storage").textContent = formatBytes(data.totals.storageBytes);
+      document.getElementById("users").innerHTML = data.users.map(user => {
+        const traffic = formatBytes(user.usage.inboundBytes) + " in / " + formatBytes(user.usage.outboundBytes) + " out";
+        const devices = user.devices.length ? user.devices.map(device => escapeHTML(device.deviceName)).join("<br>") : "<span class='muted'>none</span>";
+        const statusClass = user.onlineSessions > 0 ? "ok" : user.queuedEnvelopeCount > 20 ? "warn" : "muted";
+        const lastSeen = user.presence?.lastSeenAt ? new Date(user.presence.lastSeenAt).toLocaleString() : "unknown";
+        return "<tr>" +
+          "<td>" + escapeHTML(user.displayName || "(no name)") + "</td>" +
+          "<td><code>" + escapeHTML(user.userID) + "</code></td>" +
+          "<td class='" + statusClass + "'>" + (user.onlineSessions > 0 ? "online" : "offline") + "</td>" +
+          "<td>" + devices + "</td>" +
+          "<td>" + user.queuedEnvelopeCount + " / " + formatBytes(user.queuedBytes) + "</td>" +
+          "<td>" + traffic + "</td>" +
+          "<td>" + formatBytes(user.storageBytes) + "</td>" +
+          "<td>" + escapeHTML(lastSeen) + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+    function formatBytes(value) {
+      if (value < 1024) return value + " B";
+      if (value < 1024 * 1024) return (value / 1024).toFixed(1) + " KB";
+      return (value / 1024 / 1024).toFixed(1) + " MB";
+    }
+    function escapeHTML(value) {
+      return String(value || "").replace(/[&<>"']/g, char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+    }
+  </script>
+</body>
+</html>`);
+}
+
 function patchDirectChatWebBundle(source) {
   return source
     .replace(
@@ -887,6 +1218,11 @@ class UpstashStore {
     await this.redis.del(userKey(userID));
     await this.redis.srem(USER_INDEX_KEY, userID);
   }
+
+  async listUserIDs() {
+    const values = await this.redis.smembers(USER_INDEX_KEY);
+    return Array.isArray(values) ? values : [];
+  }
 }
 
 class MemoryStore {
@@ -904,6 +1240,10 @@ class MemoryStore {
 
   async deleteUser(userID) {
     this.users.delete(userID);
+  }
+
+  async listUserIDs() {
+    return [...this.users.keys()];
   }
 }
 
@@ -927,7 +1267,8 @@ function normalizeRecord(raw) {
     deviceMailboxes: value.deviceMailboxes && typeof value.deviceMailboxes === "object" ? value.deviceMailboxes : {},
     pushSubscriptions: Array.isArray(value.pushSubscriptions) ? value.pushSubscriptions : [],
     lastPushAt: Number(value.lastPushAt || 0),
-    accountPresence: value.accountPresence || null
+    accountPresence: value.accountPresence || null,
+    usageStats: normalizeUsageStats(value.usageStats)
   };
 }
 
@@ -947,6 +1288,15 @@ async function readJSONBody(request) {
   }
   const text = Buffer.concat(chunks).toString("utf8");
   return text ? JSON.parse(text) : {};
+}
+
+function byteLengthJSON(value) {
+  return Buffer.byteLength(JSON.stringify(value || null), "utf8");
+}
+
+function safeNumber(value) {
+  const number = Number(value || 0);
+  return Number.isFinite(number) && number > 0 ? number : 0;
 }
 
 function publicBaseURL(request) {
@@ -984,6 +1334,11 @@ function cleanDeviceID(value) {
 function sanitizeDeviceName(value) {
   const trimmed = String(value || "").trim();
   return trimmed ? trimmed.slice(0, 80) : "DirectChat device";
+}
+
+function sanitizeDisplayName(value) {
+  const trimmed = String(value || "").trim();
+  return trimmed ? trimmed.slice(0, 80) : "";
 }
 
 function normalizeSyncCursor(value) {
