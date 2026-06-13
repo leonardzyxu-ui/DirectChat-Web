@@ -1,4 +1,4 @@
-const CACHE_NAME = "directchat-shell-v5";
+const CACHE_NAME = "directchat-shell-v6";
 const SCOPE_PATH = new URL(self.registration.scope).pathname;
 const SHELL_URLS = ["./", "./pwa-192.png", "./pwa-512.png", "./pwa-192.svg", "./pwa-512.svg"].map(path => new URL(path, self.registration.scope).toString());
 

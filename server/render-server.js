@@ -9,7 +9,7 @@ import { WebSocket, WebSocketServer } from "ws";
 
 const MIN_CLIENT_PROTOCOL_VERSION = 2;
 const CLIENT_PROTOCOL_HEADER = "X-DirectChat-Protocol";
-const SERVER_BUILD = "display-name-v4";
+const SERVER_BUILD = "display-name-v5";
 const MAX_MAILBOX_ITEMS = 100;
 const MAX_DEVICE_MAILBOX_ITEMS = 100;
 const MAX_QUEUED_ENVELOPE_BYTES = 64 * 1024;
@@ -733,10 +733,12 @@ async function collectAdminOverview(context) {
       continue;
     }
     const queued = queuedEnvelopeStats(record);
+    const nameInfo = dashboardDisplayNameInfo(record);
     const storageBytes = byteLengthJSON(record);
     users.push({
       userID,
-      displayName: dashboardDisplayName(record),
+      displayName: nameInfo.displayName,
+      displayNameSource: nameInfo.source,
       onlineSessions: activeSessionCount(userID, context),
       devices: record.accountDevices.map(device => ({
         deviceID: device.deviceID,
@@ -1125,7 +1127,7 @@ function serveAdminDashboard(response) {
           <table>
             <thead>
               <tr>
-                <th>Name</th><th>ID</th><th>Status</th><th>Devices</th><th>Queued</th><th>Traffic</th><th>Storage</th><th>Last Seen</th>
+                <th>Name</th><th>Name Source</th><th>ID</th><th>Status</th><th>Devices</th><th>Queued</th><th>Traffic</th><th>Storage</th><th>Last Seen</th>
               </tr>
             </thead>
             <tbody id="users"></tbody>
@@ -1185,6 +1187,7 @@ function serveAdminDashboard(response) {
         const lastSeen = user.presence?.lastSeenAt ? new Date(user.presence.lastSeenAt).toLocaleString() : "unknown";
         return "<tr>" +
           "<td>" + escapeHTML(user.displayName || "(no name)") + "</td>" +
+          "<td class='muted'>" + escapeHTML(user.displayNameSource || "none") + "</td>" +
           "<td><code>" + escapeHTML(user.userID) + "</code></td>" +
           "<td class='" + statusClass + "'>" + (user.onlineSessions > 0 ? "online" : "offline") + "</td>" +
           "<td>" + devices + "</td>" +
@@ -1380,15 +1383,22 @@ function sanitizeDisplayName(value) {
 }
 
 function dashboardDisplayName(record) {
+  return dashboardDisplayNameInfo(record).displayName;
+}
+
+function dashboardDisplayNameInfo(record) {
   const profileName = sanitizeDisplayName(record.profile?.displayName);
   const accountName = sanitizeDisplayName(record.accountVault?.displayName);
   if (isUsefulDisplayName(profileName)) {
-    return profileName;
+    return { displayName: profileName, source: "profile" };
   }
   if (isUsefulDisplayName(accountName)) {
-    return accountName;
+    return { displayName: accountName, source: "account" };
   }
-  return "";
+  if (profileName || accountName) {
+    return { displayName: "", source: "generic" };
+  }
+  return { displayName: "", source: "none" };
 }
 
 function bestProfileDisplayName(incoming, record) {
