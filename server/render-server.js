@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Redis } from "@upstash/redis";
 import { WebSocket, WebSocketServer } from "ws";
+import { legacyRedirectLocation } from "./legacy-redirect.mjs";
 
 const MIN_CLIENT_PROTOCOL_VERSION = 2;
 const CLIENT_PROTOCOL_HEADER = "X-DirectChat-Protocol";
@@ -41,6 +42,12 @@ export function createDirectChatServer(options = {}) {
 
   server.on("upgrade", (request, socket, head) => {
     const url = new URL(request.url || "/", publicBaseURL(request));
+    const redirect = legacyRedirectLocation(process.env.DIRECTCHAT_LEGACY_REDIRECT_URL, url.toString());
+    if (redirect) {
+      socket.write(`HTTP/1.1 308 Permanent Redirect\r\nLocation: ${redirect}\r\nConnection: close\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
     const userID = cleanID(url.pathname.startsWith("/ws/") ? url.pathname.slice("/ws/".length) : "");
     if (!userID) {
       socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
@@ -57,6 +64,12 @@ export function createDirectChatServer(options = {}) {
 
 async function handleHTTP(request, response, context) {
   const url = new URL(request.url || "/", publicBaseURL(request));
+  const redirect = legacyRedirectLocation(process.env.DIRECTCHAT_LEGACY_REDIRECT_URL, url.toString());
+  if (redirect) {
+    response.writeHead(308, { Location: redirect, "Cache-Control": "no-store" });
+    response.end();
+    return;
+  }
 
   if (request.method === "OPTIONS") {
     response.writeHead(204, corsHeaders());
