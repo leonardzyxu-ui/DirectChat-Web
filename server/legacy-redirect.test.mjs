@@ -9,8 +9,28 @@ test("legacy redirect preserves paths and queries on the pinned VPS host", () =>
   );
 });
 
-test("legacy redirect fails closed for missing, non-HTTPS, or malformed targets", () => {
-  assert.equal(legacyRedirectLocation("", "/"), null);
-  assert.equal(legacyRedirectLocation("http://example.test", "/"), null);
-  assert.equal(legacyRedirectLocation("not a URL", "/"), null);
+test("legacy redirect accepts only the pinned origin with an optional trailing slash", () => {
+  for (const target of [
+    "https://directchat.srv1807979.hstgr.cloud",
+    "https://directchat.srv1807979.hstgr.cloud/"
+  ]) {
+    assert.equal(legacyRedirectLocation(target, "/"), "https://directchat.srv1807979.hstgr.cloud/");
+  }
+});
+
+test("legacy redirect fails closed for every non-pinned configuration shape", () => {
+  for (const target of [
+    "",
+    "http://directchat.srv1807979.hstgr.cloud",
+    "https://directchat.srv1807979.hstgr.cloud.evil.test/",
+    "https://sub.directchat.srv1807979.hstgr.cloud/",
+    "https://directchat.srv1807979.hstgr.cloud:8443/",
+    "https://user@directchat.srv1807979.hstgr.cloud/",
+    "https://directchat.srv1807979.hstgr.cloud/other",
+    "https://directchat.srv1807979.hstgr.cloud/?query=1",
+    "https://directchat.srv1807979.hstgr.cloud/#fragment",
+    "not a URL"
+  ]) {
+    assert.equal(legacyRedirectLocation(target, "/"), null, target);
+  }
 });

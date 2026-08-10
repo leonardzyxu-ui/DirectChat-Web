@@ -1,19 +1,26 @@
-const HTTPS_URL = /^https:\/\//i;
+const CANONICAL_ORIGIN = "https://directchat.srv1807979.hstgr.cloud";
 
 /**
- * Build the one permitted legacy-public redirect destination.  Invalid or
- * non-HTTPS configuration is intentionally ignored so a bad Render variable
- * cannot turn the old service into an open redirect.
+ * Build the one permitted legacy-public redirect destination. Invalid
+ * configuration is intentionally ignored: this is a pin, not a general
+ * redirect mechanism.
  */
 export function legacyRedirectLocation(configuredTarget, requestURL) {
   const candidate = String(configuredTarget || "").trim();
-  if (!HTTPS_URL.test(candidate)) return null;
   let target;
   try {
     target = new URL(candidate);
-    if (target.protocol !== "https:") return null;
+    if (
+      target.origin !== CANONICAL_ORIGIN ||
+      target.username ||
+      target.password ||
+      target.pathname !== "/" ||
+      target.search ||
+      target.hash
+    ) return null;
     const incoming = new URL(requestURL || "/", "https://legacy.invalid");
-    return new URL(`${incoming.pathname}${incoming.search}`, target).toString();
+    const path = incoming.pathname.startsWith("/") ? incoming.pathname : `/${incoming.pathname}`;
+    return new URL(`${path}${incoming.search}`, `${CANONICAL_ORIGIN}/`).toString();
   } catch {
     return null;
   }
