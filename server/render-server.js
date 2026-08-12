@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Redis } from "@upstash/redis";
 import { WebSocket, WebSocketServer } from "ws";
 import { legacyRedirectLocation } from "./legacy-redirect.mjs";
+import { legacyDoorwayHTML, migrationConfig } from "./legacy-doorway.mjs";
 
 const MIN_CLIENT_PROTOCOL_VERSION = 2;
 const CLIENT_PROTOCOL_HEADER = "X-DirectChat-Protocol";
@@ -64,7 +65,9 @@ export function createDirectChatServer(options = {}) {
 
 async function handleHTTP(request, response, context) {
   const url = new URL(request.url || "/", publicBaseURL(request));
-  const redirect = legacyRedirectLocation(process.env.DIRECTCHAT_LEGACY_REDIRECT_URL, url.toString());
+  const migration = migrationConfig();
+  if (migration && url.origin === migration.oldOrigin && !url.pathname.startsWith("/api/")) { response.writeHead(200,{"Content-Type":"text/html; charset=utf-8","Cache-Control":"no-store","Referrer-Policy":"no-referrer"}); response.end(legacyDoorwayHTML(migration)); return; }
+  const redirect = migration ? null : legacyRedirectLocation(process.env.DIRECTCHAT_LEGACY_REDIRECT_URL, url.toString());
   if (redirect) {
     response.writeHead(308, { Location: redirect, "Cache-Control": "no-store" });
     response.end();
