@@ -8,6 +8,7 @@ import { Redis } from "@upstash/redis";
 import { WebSocket, WebSocketServer } from "ws";
 import { legacyRedirectLocation } from "./legacy-redirect.mjs";
 import { legacyDoorwayHTML, migrationConfig } from "./legacy-doorway.mjs";
+import { pushLegacyAccountVaults } from "./legacy-vault-push.mjs";
 
 const MIN_CLIENT_PROTOCOL_VERSION = 2;
 const CLIENT_PROTOCOL_HEADER = "X-DirectChat-Protocol";
@@ -1500,5 +1501,17 @@ if (process.argv[1] && path.resolve(process.argv[1]) === CURRENT_FILE) {
   const { server } = createDirectChatServer();
   server.listen(port, () => {
     console.log(`DirectChat Render relay listening on http://127.0.0.1:${port}`);
+    if (process.env.DIRECTCHAT_LEGACY_VAULT_EXPORT_AUTORUN === "true") {
+      // This is intentionally one process-start attempt. The VPS consumes the
+      // receiver token before staging, so a restart cannot replay an import.
+      queueMicrotask(async () => {
+        try {
+          const result = await pushLegacyAccountVaults({ redis: Redis.fromEnv() });
+          console.log(JSON.stringify({ legacyVaultExport: "accepted", aggregate: result.aggregate, imported: result.imported, duplicates: result.duplicates }));
+        } catch {
+          console.log(JSON.stringify({ legacyVaultExport: "rejected" }));
+        }
+      });
+    }
   });
 }

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server/render-server.js",
-    "check": "node --test server/legacy-redirect.test.mjs && node --check server/render-server.js && node --check server/legacy-doorway.mjs && node --check scripts/export-legacy-accounts.mjs"
+    "check": "node --test server/legacy-redirect.test.mjs server/legacy-vault-push.test.mjs && node --check server/render-server.js && node --check server/legacy-doorway.mjs && node --check server/legacy-vault-push.mjs && node --check scripts/export-legacy-accounts.mjs"
   },
   "dependencies": {
     "@upstash/redis": "^1.38.0",

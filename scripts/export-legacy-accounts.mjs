@@ -1,7 +1,6 @@
 // Run only inside the Render service environment. Never logs records, IDs,
 // vaults, verifiers, ciphertext, Safety Codes, keys, or message data.
 import { createHash } from "node:crypto";
-import { Redis } from "@upstash/redis";
 
 const digest = value => createHash("sha256").update(JSON.stringify(value)).digest("hex");
 const validID = value => /^[A-Z0-9-]{6,40}$/.test(String(value || ""));
@@ -22,4 +21,4 @@ export async function collectLegacyAccountVaults(redis) {
   return { format: "directchat-account-export-v1", indexedUsers: ids.length, accounts, aggregate: { indexedUsers: ids.length, accounts: accounts.length, digest: digest(accounts.map(item => ({ idHash: digest(item.userID), vaultHash: digest(item.record.accountVault), profileHash: digest(item.record.profile) }))) } };
 }
 
-if (process.argv[1]?.endsWith("export-legacy-accounts.mjs")) collectLegacyAccountVaults(Redis.fromEnv()).then(result => console.log(JSON.stringify({ ok: true, ...result.aggregate }))).catch(error => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1]?.endsWith("export-legacy-accounts.mjs")) import("@upstash/redis").then(({ Redis }) => collectLegacyAccountVaults(Redis.fromEnv())).then(result => console.log(JSON.stringify({ ok: true, ...result.aggregate }))).catch(error => { console.error(error.message); process.exitCode = 1; });
