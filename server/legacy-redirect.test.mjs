@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { legacyRedirectLocation } from "./legacy-redirect.mjs";
+import { base64URLFromBytes, legacyDoorwayHTML } from "./legacy-doorway.mjs";
 
 test("legacy redirect preserves paths and queries on the pinned VPS host", () => {
   assert.equal(
@@ -33,4 +34,16 @@ test("legacy redirect fails closed for every non-pinned configuration shape", ()
   ]) {
     assert.equal(legacyRedirectLocation(target, "/"), null, target);
   }
+});
+
+test("migration base64 encoding handles large account snapshots without argument explosion", () => {
+  const bytes = Uint8Array.from({ length: 512 * 1024 }, (_, index) => index % 256);
+  assert.equal(base64URLFromBytes(bytes), Buffer.from(bytes).toString("base64url"));
+
+  const html = legacyDoorwayHTML({
+    oldOrigin: "https://directchat-relay.onrender.com",
+    targetOrigin: "https://directchat.srv1807979.hstgr.cloud"
+  });
+  assert.match(html, /offset \+= 0x8000/);
+  assert.doesNotMatch(html, /String\.fromCharCode\(\.\.\.b\)/);
 });
