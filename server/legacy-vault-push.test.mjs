@@ -6,7 +6,7 @@ const key = "B".repeat(43), token = "A".repeat(43);
 const environment = {
   DIRECTCHAT_LEGACY_VAULT_EXPORT_ENABLED: "true",
   DIRECTCHAT_LEGACY_MIGRATION_ORIGIN: "https://directchat-relay.onrender.com",
-  DIRECTCHAT_LEGACY_VAULT_IMPORT_URL: "https://directchat.srv1807979.hstgr.cloud/api/internal/legacy-vault-import",
+  DIRECTCHAT_LEGACY_VAULT_IMPORT_URL: "https://directchat.srv1921833.hstgr.cloud/api/internal/legacy-vault-import",
   DIRECTCHAT_LEGACY_VAULT_IMPORT_TOKEN: token,
   DIRECTCHAT_LEGACY_VAULT_TRANSPORT_KEY: key
 };
@@ -27,7 +27,7 @@ test("sealed vault push uses exact HTTPS receiver/origin and returns aggregate-o
 });
 
 test("vault push fails closed for a lookalike receiver, incomplete config, and receiver reconciliation mismatch", async () => {
-  assert.equal(vaultPushConfiguration({ ...environment, DIRECTCHAT_LEGACY_VAULT_IMPORT_URL: "https://directchat.srv1807979.hstgr.cloud.evil/api/internal/legacy-vault-import" }), null);
+  assert.equal(vaultPushConfiguration({ ...environment, DIRECTCHAT_LEGACY_VAULT_IMPORT_URL: "https://directchat.srv1921833.hstgr.cloud.evil/api/internal/legacy-vault-import" }), null);
   await assert.rejects(() => pushLegacyAccountVaults({ redis: syntheticRedis(), environment, fetchImpl: async () => ({ ok: true, json: async () => ({ ok: true, aggregate: { indexedUsers: 9 } }) }) }), /reconciliation/);
 });
 

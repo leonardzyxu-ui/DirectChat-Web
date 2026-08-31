@@ -1,7 +1,10 @@
 // Old-origin only. The VPS owns receipt persistence and redemption.
+const CANONICAL_TARGET_ORIGIN = "https://directchat.srv1921833.hstgr.cloud";
+const RETIRED_TARGET_ORIGIN = "https://directchat.srv1807979.hstgr.cloud";
 export function migrationConfig(env = process.env) {
   const oldOrigin = exactOrigin(env.DIRECTCHAT_LEGACY_MIGRATION_ORIGIN || "");
-  const targetOrigin = exactOrigin(env.DIRECTCHAT_LEGACY_MIGRATION_TARGET || "");
+  const configuredTarget = exactOrigin(env.DIRECTCHAT_LEGACY_MIGRATION_TARGET || "");
+  const targetOrigin = configuredTarget === RETIRED_TARGET_ORIGIN ? CANONICAL_TARGET_ORIGIN : configuredTarget;
   return oldOrigin && targetOrigin ? { oldOrigin, targetOrigin } : null;
 }
 function exactOrigin(value) { try { const url = new URL(String(value || "")); return url.protocol === "https:" && !url.username && !url.password && !url.port && url.pathname === "/" && !url.search && !url.hash ? url.origin : ""; } catch { return ""; } }

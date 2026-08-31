@@ -34,6 +34,6 @@ function seal(bundle, keyValue, now) {
   return { format: FORMAT, issuedAt: new Date(now).toISOString(), expiresAt: new Date(now + 10 * 60 * 1000).toISOString(), aggregate: bundle.aggregate, bundleDigest: digest(plaintext), nonceBase64: nonce.toString("base64url"), ciphertextBase64: ciphertext.toString("base64url"), authTagBase64: cipher.getAuthTag().toString("base64url") };
 }
 function exactHTTPSOrigin(value) { try { const url = new URL(String(value || "")); return url.protocol === "https:" && !url.username && !url.password && !url.port && url.pathname === "/" && !url.search && !url.hash ? url.origin : ""; } catch { return ""; } }
-function exactHTTPSURL(value) { try { const url = new URL(String(value || "")); return url.origin === "https://directchat.srv1807979.hstgr.cloud" && !url.username && !url.password && !url.port && !url.search && !url.hash && url.pathname === "/api/internal/legacy-vault-import" ? url.toString() : ""; } catch { return ""; } }
+function exactHTTPSURL(value) { try { const url = new URL(String(value || "")); return url.origin === "https://directchat.srv1921833.hstgr.cloud" && !url.username && !url.password && !url.port && !url.search && !url.hash && url.pathname === "/api/internal/legacy-vault-import" ? url.toString() : ""; } catch { return ""; } }
 function validKey(value) { try { return B64URL.test(value) && Buffer.from(value, "base64url").length === 32; } catch { return false; } }
 function digest(value) { return createHash("sha256").update(value).digest("hex"); }

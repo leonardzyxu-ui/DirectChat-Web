@@ -23,7 +23,7 @@ services:
       - key: DIRECTCHAT_LEGACY_MIGRATION_ORIGIN
         value: https://directchat-relay.onrender.com
       - key: DIRECTCHAT_LEGACY_MIGRATION_TARGET
-        value: https://directchat.srv1807979.hstgr.cloud
+        value: https://directchat.srv1921833.hstgr.cloud
       # Temporary one-shot encrypted vault transport. Set all of these only
       # for the migration deployment, remove them immediately after its
       # aggregate-only acceptance log is recorded, then redeploy.

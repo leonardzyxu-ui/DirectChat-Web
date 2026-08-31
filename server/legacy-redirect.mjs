@@ -1,4 +1,4 @@
-const CANONICAL_ORIGIN = "https://directchat.srv1807979.hstgr.cloud";
+const CANONICAL_ORIGIN = "https://directchat.srv1921833.hstgr.cloud";
 
 /**
  * Build the one permitted legacy-public redirect destination. Invalid
