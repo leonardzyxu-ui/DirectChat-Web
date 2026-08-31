@@ -1,10 +1,11 @@
 # DirectChat Web
 
-This repository is the DirectChat web app plus Render relay deployment.
+This repository is the DirectChat web app plus the Render migration doorway for
+the Malaysian VPS relay.
 
 The page reads `relay-config.json` at runtime, so the stable website URL can stay the same while the active relay URL changes.
 
-Current Render URL:
+Migration doorway (kept online for existing browser accounts):
 
 ```text
 https://directchat-relay.onrender.com/
@@ -13,7 +14,7 @@ https://directchat-relay.onrender.com/
 Current relay:
 
 ```text
-https://directchat-relay.onrender.com/
+https://directchat.srv1921833.hstgr.cloud/
 ```
 
 Legacy Cloudflare Pages URL:
